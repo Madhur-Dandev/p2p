@@ -2,7 +2,7 @@
 
 A modular, decentralized peer-to-peer (P2P) file discovery and transfer application built incrementally in Python 3.12+ using `asyncio`, `sqlite3`, `hashlib`, `tomllib`, and `argparse`.
 
-> **Current Stage:** **Milestone 1 — Project Foundation** (packaging, constants, exceptions, TOML configuration, rotating contextual logging, CLI entry point, architecture & protocol specifications, and initial unit tests). Networking, SQLite indexing, search, transfer, and daemon IPC are implemented incrementally across Milestones 2–12.
+> **Current Stage:** **Milestone 4 — Unified Binary Protocol Framing & Request Correlation** (builds on Milestones 1–3 with a unified 26-byte binary header codec, typed payload validation for all 11 protocol messages, `RequestCorrelator`, and protocol-upgraded TCP/UDP transport). SQLite indexing, search, file transfer, and daemon IPC arrive in Milestones 5–12.
 
 ## Project Overview
 
@@ -47,7 +47,7 @@ python -m p2p config init
 
 Or copy and customize [config.example.toml](config.example.toml), then point to it with `--config /path/to/config.toml` or `P2P_CONFIG=/path/to/config.toml`.
 
-## Usage (Milestone 1)
+## Usage (Milestones 1–4)
 
 ```bash
 # Show CLI help and available / planned commands
@@ -65,6 +65,14 @@ python -m p2p --config ./local-peer.toml share remove ~/Documents/shared
 
 # View recent rotating log entries
 python -m p2p --config ./local-peer.toml logs --lines 20
+
+# Temporary dev mode: verify correlated 26-byte P2P v1 TCP PING/PONG & UDP discovery
+# Terminal 1 (Node A):
+python -m p2p --config ./peer1.toml dev peer-node --host 127.0.0.1 --tcp-port 9001 --udp-port 9998 --no-broadcast --udp-target 127.0.0.1:9999
+# Terminal 2 (Node B):
+python -m p2p --config ./peer2.toml dev peer-node --host 127.0.0.1 --tcp-port 9002 --udp-port 9999 --no-broadcast --udp-target 127.0.0.1:9998
+# Terminal 3 (TCP PING check):
+python -m p2p --config ./peer2.toml dev tcp-ping 127.0.0.1 9001
 ```
 
 ## Network & Security Scope
@@ -75,16 +83,18 @@ python -m p2p --config ./local-peer.toml logs --lines 20
 ## Testing & Code Quality
 
 ```bash
-pytest
-ruff check src tests
+python -m pytest -v
+python -m ruff check src tests
 ```
+
+*(Using `python -m ...` ensures tools run under the active virtual environment's interpreter even when `.venv` inherits system packages via `--system-site-packages`.)*
 
 ## Development Roadmap
 
 1. **Milestone 1 (Complete):** Project foundation, architecture & protocol specs, TOML config, rotating logging, CLI, unit tests.
-2. **Milestone 2:** Asynchronous TCP server/client communication.
-3. **Milestone 3:** UDP LAN discovery, heartbeats, static fallback, and peer registry.
-4. **Milestone 4:** Binary frame codec, payload validation, and request correlation.
+2. **Milestone 2 (Complete):** Asynchronous TCP server/client communication and framing tests.
+3. **Milestone 3 (Complete):** UDP LAN discovery, heartbeats, static fallback, and peer registry.
+4. **Milestone 4 (Complete):** Binary frame codec, payload validation, and request correlation.
 5. **Milestone 5:** SQLite storage migrations and secure shared-directory SHA-256 indexing.
 6. **Milestone 6:** Local file search.
 7. **Milestone 7:** Distributed search across peers with bounded timeouts and result merging.

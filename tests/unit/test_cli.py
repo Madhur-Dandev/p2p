@@ -18,10 +18,18 @@ from p2p.constants import APP_VERSION
 
 @pytest.mark.unit
 def test_module_help_and_version_via_subprocess() -> None:
+    src_dir = str(Path(__file__).resolve().parents[2] / "src")
+    env = os.environ.copy()
+    existing_pythonpath = env.get("PYTHONPATH", "")
+    env["PYTHONPATH"] = (
+        f"{src_dir}{os.pathsep}{existing_pythonpath}" if existing_pythonpath else src_dir
+    )
+
     help_proc = subprocess.run(
         [sys.executable, "-m", "p2p", "--help"],
         capture_output=True,
         text=True,
+        env=env,
         check=False,
     )
     assert help_proc.returncode == 0
@@ -34,6 +42,7 @@ def test_module_help_and_version_via_subprocess() -> None:
         [sys.executable, "-m", "p2p", "--version"],
         capture_output=True,
         text=True,
+        env=env,
         check=False,
     )
     assert ver_proc.returncode == 0
@@ -151,4 +160,13 @@ def test_planned_commands_fail_honestly_until_implemented(
     out, err = io.StringIO(), io.StringIO()
     code = run_cli(argv, stdout=out, stderr=err)
     assert code == 2
-    assert "not yet implemented in Milestone 1" in err.getvalue()
+    assert "not yet implemented" in err.getvalue()
+
+
+@pytest.mark.unit
+def test_dev_subcommand_help_prints_usage() -> None:
+    out, err = io.StringIO(), io.StringIO()
+    code = run_cli(["dev"], stdout=out, stderr=err)
+    assert code == 2
+    assert "tcp-server" in out.getvalue()
+    assert "tcp-ping" in out.getvalue()

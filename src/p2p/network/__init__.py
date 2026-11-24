@@ -1,0 +1,82 @@
+"""Networking components for protocol framing, discovery, and TCP transport."""
+
+from p2p.network.discovery import (
+    DiscoveryMessageType,
+    DiscoveryPacket,
+    DiscoveryService,
+    DiscoveryStats,
+    decode_discovery_packet,
+    encode_discovery_packet,
+    parse_host_port,
+)
+from p2p.network.framing import (
+    Frame,
+    FrameHeader,
+    pack_frame,
+    read_frame,
+    unpack_datagram_frame,
+    unpack_header,
+    write_frame,
+)
+from p2p.network.peer_registry import PeerInfo, PeerRegistry, PeerStatus
+from p2p.network.protocol import (
+    AnnounceMessage,
+    DecodedMessage,
+    DiscoverMessage,
+    FileDataMessage,
+    FileInfoMessage,
+    GetFileMessage,
+    HeartbeatMessage,
+    MessageType,
+    PingMessage,
+    PongMessage,
+    RequestCorrelator,
+    SearchRequestMessage,
+    SearchResponseMessage,
+    SearchResultRecord,
+    TransferErrorMessage,
+)
+from p2p.network.serialization import decode_message, encode_message
+from p2p.network.tcp_client import TcpClient, TcpConnection
+from p2p.network.tcp_server import TcpServer, TcpServerStats
+
+__all__ = [
+    "AnnounceMessage",
+    "DecodedMessage",
+    "DiscoverMessage",
+    "DiscoveryMessageType",
+    "DiscoveryPacket",
+    "DiscoveryService",
+    "DiscoveryStats",
+    "FileDataMessage",
+    "FileInfoMessage",
+    "Frame",
+    "FrameHeader",
+    "GetFileMessage",
+    "HeartbeatMessage",
+    "MessageType",
+    "PeerInfo",
+    "PeerRegistry",
+    "PeerStatus",
+    "PingMessage",
+    "PongMessage",
+    "RequestCorrelator",
+    "SearchRequestMessage",
+    "SearchResponseMessage",
+    "SearchResultRecord",
+    "TcpClient",
+    "TcpConnection",
+    "TcpServer",
+    "TcpServerStats",
+    "TransferErrorMessage",
+    "decode_discovery_packet",
+    "decode_message",
+    "encode_discovery_packet",
+    "encode_message",
+    "pack_frame",
+    "parse_host_port",
+    "read_frame",
+    "unpack_datagram_frame",
+    "unpack_header",
+    "write_frame",
+]

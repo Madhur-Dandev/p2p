@@ -51,10 +51,10 @@ flowchart TD
 | `p2p.utils` | Milestone 1 (Implemented) | UUIDv4 peer/request/transfer ID generation and validation; UTC and monotonic clocks. |
 | `p2p.config` | Milestone 1 (Implemented) | Typed configuration dataclasses, `tomllib` parsing, validation, atomic TOML writes, shared-directory config management. |
 | `p2p.logging_config` | Milestone 1 (Implemented) | UTC rotating file + stderr logging with `peer_id`, `request_id`, and `transfer_id` correlation fields. |
-| `p2p.cli`, `p2p.main` | Milestone 1 (Implemented) | `argparse` CLI entry point (`python -m p2p`) supporting config, share, logs, and honest milestone gating for later subsystems. |
-| `p2p.network.framing`, `p2p.network.protocol`, `p2p.network.serialization` | Milestone 2 & 4 (Planned) | 26-byte binary header encoding/decoding, stream reassembly (`readexactly`), message schemas, request correlation. |
-| `p2p.network.tcp_server`, `p2p.network.tcp_client` | Milestone 2 (Planned) | `asyncio.start_server` / `asyncio.open_connection` handlers with connection limits and timeouts. |
-| `p2p.network.discovery`, `p2p.network.peer_registry` | Milestone 3 (Planned) | UDP discovery announcements, periodic heartbeats, static fallback, and `ACTIVE`/`STALE`/`REMOVED` peer tracking. |
+| `p2p.cli`, `p2p.main` | Milestone 1–4 (Implemented) | `argparse` CLI entry point (`python -m p2p`) supporting config, share, logs, temporary `dev` foreground commands (`tcp-server`, `tcp-ping`, `peer-node`), and honest milestone gating for later subsystems. |
+| `p2p.network.framing`, `p2p.network.protocol`, `p2p.network.serialization` | Milestone 4 (Implemented) | Authoritative 26-byte binary header codec, typed schema validation for all 11 messages, JSON/raw serialization, and `RequestCorrelator`. |
+| `p2p.network.tcp_server`, `p2p.network.tcp_client` | Milestone 2 & 4 (Implemented) | `asyncio.start_server` / `asyncio.open_connection` speaking 26-byte protocol frames with `request_id` correlation, bounded connections, and graceful shutdown. |
+| `p2p.network.discovery`, `p2p.network.peer_registry` | Milestone 3 & 4 (Implemented) | UDP discovery (`DISCOVER`/`ANNOUNCE`/`HEARTBEAT`), static-peer TCP fallback, and `ACTIVE`/`STALE`/`REMOVED` peer registry using unified framing. |
 | `p2p.storage` | Milestone 5 (Planned) | SQLite schema migrations, parameterized repositories for peers, shared files, downloads, and resume checkpoints. |
 | `p2p.indexing` | Milestone 5 (Planned) | Recursive non-symlink directory scanning, metadata caching `(size, mtime_ns)`, streaming SHA-256 hashing. |
 | `p2p.search` | Milestone 6 & 7 (Planned) | Local SQLite matching plus bounded-timeout concurrent queries across active peers and result deduplication. |
@@ -64,5 +64,5 @@ flowchart TD
 
 ## 4. Implementation Status
 
-- **Completed:** Milestone 1 (foundation, package metadata, constants, exceptions, utilities, TOML configuration, rotating contextual logging, CLI entry point, and initial unit tests).
-- **Next:** Milestone 2 (minimal asynchronous TCP client/server communication).
+- **Completed:** Milestones 1–4 (foundation/CLI/config/logging, async TCP server/client, UDP discovery + peer registry, unified 26-byte binary framing, typed validation for all 11 messages, and `request_id` correlation).
+- **Next:** Milestone 5 (SQLite persistence and secure shared-directory SHA-256 indexing).
