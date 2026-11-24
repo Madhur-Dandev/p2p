@@ -1,0 +1,103 @@
+# Example configuration for the Decentralized P2P File Discovery and Transfer System.
+# Copy to ~/.config/p2p/config.toml or generate one automatically via:
+#   python -m p2p config init
+
+[node]
+# Unique persistent UUIDv4 identifying this peer on the network.
+peer_id = "00000000-0000-4000-8000-000000000001"
+# Human-readable label shown in peer listings and search results.
+display_name = "my-workstation"
+
+[network]
+# Address to bind the TCP listener ("0.0.0.0" listens on all IPv4 interfaces).
+bind_host = "0.0.0.0"
+# TCP port used for control queries (SEARCH, PING) and direct file transfers.
+tcp_port = 9000
+# Optional explicit IP/hostname advertised to LAN peers (empty string = auto-detect).
+advertise_host = ""
+# Timeout in seconds when opening an outbound TCP connection.
+connect_timeout_sec = 5.0
+# Timeout in seconds waiting for a single control response frame.
+control_timeout_sec = 5.0
+
+[discovery]
+# Enable UDP LAN discovery announcements and listener.
+enabled = true
+# UDP port used for discovery broadcasts and heartbeats.
+udp_port = 9999
+# Target IPv4 broadcast address (use subnet broadcast like 192.168.1.255 if 255.255.255.255 is filtered).
+broadcast_address = "255.255.255.255"
+# Seconds between periodic discovery/heartbeat announcements.
+heartbeat_interval_sec = 10.0
+# Seconds without a heartbeat before marking a peer STALE (must exceed heartbeat_interval_sec).
+stale_timeout_sec = 35.0
+# Seconds before purging an unreachable stale peer from the active memory cache.
+remove_timeout_sec = 300.0
+# Fallback peer addresses ("host:port") used when UDP broadcast is blocked or across routed subnets.
+static_peers = []
+
+[storage]
+# Persistent data directory (SQLite metadata database).
+data_dir = "~/.local/share/p2p"
+# Runtime state directory (Unix socket and PID file).
+state_dir = "~/.local/state/p2p"
+# Path to the SQLite database file.
+database_path = "~/.local/share/p2p/p2p.db"
+# Destination directory for completed and in-progress (.part) downloads.
+download_dir = "~/Downloads/p2p"
+
+[sharing]
+# Explicit directories authorized for indexing and sharing with remote peers.
+directories = []
+# Directory names skipped during recursive indexing.
+excluded_dirs = [".git", "__pycache__", ".venv", "node_modules", ".DS_Store"]
+# Do not follow symbolic links during indexing (recommended false for security).
+follow_symlinks = false
+
+[transfer]
+# Streaming read/write buffer size in bytes (65536 = 64 KiB).
+chunk_size_bytes = 65536
+# Seconds of inactivity before an active file transfer is treated as stalled/interrupted.
+idle_timeout_sec = 30.0
+# Maximum seconds to wait when aggregating distributed search responses across peers.
+search_timeout_sec = 3.0
+# Whether to overwrite an existing file at the destination path (recommended false).
+overwrite_existing = false
+
+[limits]
+# Maximum allowed JSON control frame payload in bytes (64 KiB).
+max_control_payload_bytes = 65536
+# Maximum allowed FILE_DATA chunk payload in bytes (256 KiB).
+max_data_chunk_bytes = 262144
+# Maximum concurrent inbound/outbound TCP socket connections.
+max_simultaneous_connections = 64
+# Maximum concurrent active file transfers.
+max_concurrent_transfers = 8
+# Maximum number of in-flight correlated requests awaiting responses.
+max_outstanding_requests = 128
+# Maximum allowed search query string length in characters.
+max_query_length = 256
+# Maximum allowed destination filename length in characters.
+max_filename_length = 255
+# Maximum file size permitted for transfer in bytes (10 GiB; 0 = unlimited).
+max_file_size_bytes = 10737418240
+
+[logging]
+# Minimum log severity: DEBUG, INFO, WARNING, ERROR, CRITICAL.
+level = "INFO"
+# Path to the rotating application log file.
+file_path = "~/.local/state/p2p/p2p.log"
+# Maximum size of a single log file in bytes before rotation (5 MiB).
+max_bytes = 5242880
+# Number of rotated backup log files retained.
+backup_count = 5
+# Emit structured log records to stderr in addition to the log file.
+console_enabled = true
+
+[daemon]
+# Local Unix domain socket path for CLI-to-daemon IPC (keep <= 100 bytes on macOS).
+socket_path = "~/.local/state/p2p/p2p.sock"
+# PID file tracking the running background daemon process.
+pid_path = "~/.local/state/p2p/p2p.pid"
+# Graceful shutdown wait timeout in seconds.
+shutdown_timeout_sec = 10.0
