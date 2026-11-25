@@ -36,3 +36,6 @@ downloads/
 .DS_Store
 .vscode/
 .idea/
+
+# Extras
+github.*

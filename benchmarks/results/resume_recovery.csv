@@ -1,0 +1,2 @@
+file_size_bytes,resume_offset_bytes,fresh_download_sec,resumed_download_sec,bytes_transferred_on_resume,time_saved_sec
+16777216,8388608,0.13701379200210795,0.07766170900140423,8388608,0.059352083000703715

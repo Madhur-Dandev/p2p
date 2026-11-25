@@ -102,12 +102,18 @@ def validate_file_id(value: Any, field_name: str = "file_id") -> str:
 
 
 def validate_file_name(value: Any, *, max_length: int = MAX_FILENAME_LENGTH) -> str:
-    """Validate a plain filename containing no directory traversal or NUL bytes."""
+    """Validate a plain filename containing no directory traversal or control characters."""
     if not isinstance(value, str):
         raise MalformedMessageError("Invalid file_name: expected string")
     if not value or len(value) > max_length:
         raise MalformedMessageError(f"Invalid file_name length: must be 1..{max_length}")
-    if "\x00" in value or "/" in value or "\\" in value or value in {".", ".."}:
+    if (
+        "\x00" in value
+        or "/" in value
+        or "\\" in value
+        or value in {".", ".."}
+        or any(ord(ch) < 32 or ord(ch) == 127 for ch in value)
+    ):
         raise MalformedMessageError(f"Unsafe file_name rejected: {value!r}")
     return value
 

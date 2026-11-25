@@ -81,7 +81,7 @@ LEGAL_TRANSITIONS: dict[TransferState, frozenset[TransferState]] = {
     TransferState.SOURCE_UNAVAILABLE: frozenset(),
     TransferState.TRANSFER_INTERRUPTED: frozenset({TransferState.CONNECTING}),
     TransferState.INTEGRITY_FAILED: frozenset(),
-    TransferState.CANCELLED: frozenset(),
+    TransferState.CANCELLED: frozenset({TransferState.CONNECTING}),
 }
 
 

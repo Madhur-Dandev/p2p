@@ -44,6 +44,7 @@ from p2p.network.protocol import (
 from p2p.network.serialization import decode_message, encode_message
 from p2p.network.tcp_server import PeerAddress
 from p2p.search.local_search import LocalSearchService
+from p2p.security.limits import SlidingWindowRateLimiter
 from p2p.security.path_validation import open_shared_file_readonly
 from p2p.storage.database import Database
 from p2p.storage.repositories import FileIndexRepository
@@ -63,6 +64,7 @@ class UploadStats:
     uploads_completed: int = 0
     uploads_failed: int = 0
     bytes_sent: int = 0
+    rate_limited: int = 0
 
 
 class UploadService:
@@ -75,7 +77,7 @@ class UploadService:
         peer_id: str,
         display_name: str = "p2p-node",
         tcp_port: int = DEFAULT_TCP_PORT,
-        shared_directories: Sequence[Path] = (),
+        shared_directories: Sequence[Path] | None = None,
         search_service: LocalSearchService | None = None,
         max_concurrent_uploads: int = MAX_CONCURRENT_TRANSFERS,
         default_chunk_size: int = DEFAULT_TRANSFER_CHUNK_BYTES,
@@ -84,6 +86,7 @@ class UploadService:
         max_file_size_bytes: int = MAX_FILE_SIZE_BYTES,
         control_timeout_sec: float = DEFAULT_CONTROL_TIMEOUT_SEC,
         idle_timeout_sec: float = DEFAULT_TRANSFER_IDLE_TIMEOUT_SEC,
+        rate_limiter: SlidingWindowRateLimiter | None = None,
     ) -> None:
         self._db = db
         self._file_repo = FileIndexRepository(db)
@@ -92,7 +95,7 @@ class UploadService:
         self._tcp_port = tcp_port
         self._allowed_roots: frozenset[Path] | None = (
             frozenset(Path(d).expanduser().resolve(strict=False) for d in shared_directories)
-            if shared_directories
+            if shared_directories is not None
             else None
         )
         self._search_service = search_service
@@ -103,12 +106,23 @@ class UploadService:
         self._max_file_size_bytes = max_file_size_bytes
         self._control_timeout_sec = control_timeout_sec
         self._idle_timeout_sec = idle_timeout_sec
+        self._rate_limiter = (
+            rate_limiter
+            if rate_limiter is not None
+            else SlidingWindowRateLimiter(max_requests=200, window_sec=10.0)
+        )
         self.stats = UploadStats()
         self._logger = get_context_logger("transfer.upload", peer_id=peer_id)
 
     def set_tcp_port(self, port: int) -> None:
         """Update advertised TCP port after ephemeral TcpServer startup."""
         self._tcp_port = port
+
+    def update_shared_directories(self, shared_directories: Sequence[Path]) -> None:
+        """Refresh canonical authorized share roots after live configuration changes."""
+        self._allowed_roots = frozenset(
+            Path(d).expanduser().resolve(strict=False) for d in shared_directories
+        )
 
     async def serve_connection(
         self,
@@ -138,7 +152,7 @@ class UploadService:
                     exc,
                 )
                 return
-            except TimeoutError:
+            except (TimeoutError, OSError, ConnectionError):
                 return
 
             if frame is None:
@@ -174,6 +188,17 @@ class UploadService:
                 continue
 
             if isinstance(payload, SearchRequestMessage):
+                if not self._rate_limiter.allow(peer_addr[0]):
+                    self.stats.rate_limited += 1
+                    self._logger.warning("Rate-limited search request from %s:%d", *peer_addr)
+                    await self._send_error(
+                        writer,
+                        req_id,
+                        code="RATE_LIMITED",
+                        message="Too many requests from your address; retry later",
+                        retryable=True,
+                    )
+                    continue
                 if self._search_service is None:
                     await self._send_error(
                         writer,
@@ -187,6 +212,18 @@ class UploadService:
                 continue
 
             if isinstance(payload, GetFileMessage):
+                if not self._rate_limiter.allow(peer_addr[0]):
+                    self.stats.rate_limited += 1
+                    self.stats.uploads_failed += 1
+                    self._logger.warning("Rate-limited GET_FILE request from %s:%d", *peer_addr)
+                    await self._send_error(
+                        writer,
+                        req_id,
+                        code="RATE_LIMITED",
+                        message="Too many transfer requests from your address; retry later",
+                        retryable=True,
+                    )
+                    continue
                 await self._handle_get_file(writer, req_id, req_id_str, payload, peer_addr)
                 continue
 

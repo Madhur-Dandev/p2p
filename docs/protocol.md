@@ -229,3 +229,19 @@ sequenceDiagram
    - Matching pending future -> resolves it once.
    - Unknown or already-expired `request_id` -> logged and discarded (prevents delayed replies from poisoning subsequent operations).
 4. Incoming frame reads enforce `readexactly(26)` for the fixed header, validate `magic == b"P2"`, `version == 1`, valid `msg_type`, and `payload_len <= type_limit` **before** calling `readexactly(payload_len)`.
+
+---
+
+## 7. Resumable Downloads & Local Unix Domain Socket IPC
+
+### Resumable Transfer Semantics (Milestone 9)
+1. Upon mid-stream EOF, timeout, or cancellation after partial bytes have been written, `DownloadService` flushes/syncs the `.part` file and persists a `transfer_checkpoints` row (`resume_offset`, `expected_sha256`, `expected_size`, `part_path`).
+2. When resuming, `DownloadService.resume_download()` clamps `resume_offset = min(checkpoint.resume_offset, actual_part_size, expected_size)` and issues `GET_FILE` with `offset = resume_offset` and `expected_sha256 = checkpoint.expected_sha256`.
+3. `UploadService` rejects mismatched hashes with `TRANSFER_ERROR(code="FILE_CHANGED")` or out-of-range offsets with `INVALID_OFFSET`; callers may pass `--restart-if-changed` to discard the stale `.part` file and restart cleanly from offset `0`.
+4. After appending `[resume_offset, file_size)`, the client verifies SHA-256 over the **complete** reassembled `.part` file `[0..file_size)` before promoting via `os.replace()`.
+
+### Local Daemon Unix Socket IPC Framing (Milestone 11)
+- **Transport:** `AF_UNIX` stream socket at `daemon.socket_path` (`chmod 0o600`, <= `100` UTF-8 bytes on macOS).
+- **Header (`7 bytes`, `!2sBI`):** `magic = b"PI"`, `version = 1`, `payload_len` (`1..MAX_FRAME_PAYLOAD_BYTES`).
+- **Body:** UTF-8 JSON request `{"action": "<cmd>", "params": {...}}` and JSON reply `{"ok": true, "result": {...}}` or `{"ok": false, "error": {"type": "...", "message": "..."}}`.
+- **Actions:** `status`, `stop`, `peers`, `index_rebuild`, `share_reload`, `search`, `download`, `resume`, `downloads`, `cancel`.

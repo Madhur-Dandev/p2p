@@ -139,23 +139,23 @@ def test_cli_config_share_and_logs_end_to_end(
 @pytest.mark.parametrize(
     "argv",
     [
-        ["start"],
         ["stop"],
         ["status"],
         ["peers"],
     ],
 )
-def test_planned_commands_fail_honestly_until_implemented(
+def test_daemon_commands_report_not_running_cleanly(
     argv: list[str], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setenv("HOME", str(tmp_path))
-    monkeypatch.delenv("P2P_CONFIG", raising=False)
-    assert os.environ.get("HOME") == str(tmp_path)
+    with tempfile.TemporaryDirectory(prefix="p2phome-") as short_home:
+        monkeypatch.setenv("HOME", short_home)
+        monkeypatch.delenv("P2P_CONFIG", raising=False)
+        _ = tmp_path
 
-    out, err = io.StringIO(), io.StringIO()
-    code = run_cli(argv, stdout=out, stderr=err)
-    assert code == 2
-    assert "not yet implemented" in err.getvalue()
+        out, err = io.StringIO(), io.StringIO()
+        code = run_cli(argv, stdout=out, stderr=err)
+        assert code == 1
+        assert "daemon is not running" in err.getvalue().lower()
 
 
 @pytest.mark.unit
@@ -193,12 +193,13 @@ def test_cli_index_search_and_downloads_empty_flow(
         )
         assert "networking notes.txt" in out.getvalue()
 
-        # download without --peer reports actionable milestone requirement
+        # download without --peer or running daemon prints actionable guidance
         out, err = io.StringIO(), io.StringIO()
         assert (
             run_cli(["--config", str(cfg_path), "download", "abc123"], stdout=out, stderr=err) == 2
         )
-        assert "--peer HOST:PORT is required" in err.getvalue()
+        assert "--peer HOST:PORT" in err.getvalue()
+        assert "daemon" in err.getvalue().lower()
 
         # downloads history empty check
         out, err = io.StringIO(), io.StringIO()

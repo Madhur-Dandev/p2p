@@ -121,3 +121,90 @@ def resolve_download_destination(
     if part_path.is_symlink():
         raise PathValidationError(f"Refusing symlink temporary file: {part_path}")
     return final_path, part_path
+
+
+def validate_resume_part_file(
+    download_dir: Path,
+    part_path_str: str,
+    destination_path_str: str,
+    *,
+    overwrite: bool = False,
+) -> tuple[Path, Path]:
+    """Validate that a checkpoint's .part and destination paths remain safe inside download_dir."""
+    if not part_path_str or not destination_path_str:
+        raise TransferError("Download checkpoint is missing part_path or destination_path")
+
+    raw_root = download_dir.expanduser()
+    dest_root = raw_root.resolve(strict=False)
+    if dest_root.is_symlink() or not dest_root.is_dir():
+        raise PathValidationError(f"Download directory is invalid: {dest_root}")
+
+    part_candidate = Path(part_path_str).expanduser()
+    final_candidate = Path(destination_path_str).expanduser()
+    if part_candidate.is_relative_to(raw_root):
+        part_candidate = dest_root / part_candidate.relative_to(raw_root)
+    if final_candidate.is_relative_to(raw_root):
+        final_candidate = dest_root / final_candidate.relative_to(raw_root)
+
+    ensure_no_symlink_components(part_candidate, dest_root)
+    ensure_no_symlink_components(final_candidate, dest_root)
+
+    final_resolved = final_candidate.resolve(strict=False)
+    if not final_resolved.is_relative_to(dest_root):
+        raise PathValidationError(
+            f"Resume destination escapes download directory: {destination_path_str!r}"
+        )
+    if final_resolved.is_symlink():
+        raise PathValidationError(f"Refusing symlink destination: {final_resolved}")
+    if final_resolved.exists() and not overwrite:
+        raise TransferError(
+            f"Destination file already exists (overwrite disabled): {final_resolved}"
+        )
+
+    try:
+        part_resolved = part_candidate.resolve(strict=True)
+    except OSError as exc:
+        raise TransferError(
+            f"Partial transfer file not found for resume: {part_candidate}"
+        ) from exc
+
+    if not part_resolved.is_relative_to(dest_root):
+        raise PathValidationError(f"Partial file escapes download directory: {part_path_str!r}")
+    if part_resolved.is_symlink() or not part_resolved.is_file():
+        raise PathValidationError(f"Partial resume target is not a regular file: {part_resolved}")
+
+    return final_resolved, part_resolved
+
+
+def open_part_file_safe(part_path: Path, *, offset: int = 0) -> BinaryIO:
+    """Open a .part staging file without following symlinks and seek to offset."""
+    if offset < 0:
+        raise PathValidationError(f"Invalid negative offset {offset}")
+    parent = part_path.parent
+    parent.mkdir(parents=True, exist_ok=True)
+    if parent.is_symlink():
+        raise PathValidationError(f"Refusing symlink parent directory for part file: {parent}")
+
+    nofollow = getattr(os, "O_NOFOLLOW", 0)
+    flags = (os.O_CREAT | os.O_RDWR | nofollow) if offset == 0 else (os.O_RDWR | nofollow)
+    mode = "r+b"
+
+    try:
+        fd = os.open(part_path, flags, 0o600)
+    except OSError as exc:
+        raise PathValidationError(f"Cannot safely open .part file {part_path}: {exc}") from exc
+
+    try:
+        st = os.fstat(fd)
+        if not stat.S_ISREG(st.st_mode):
+            raise PathValidationError(f"Refusing non-regular .part descriptor: {part_path}")
+        if offset > st.st_size:
+            raise TransferError(
+                f"Requested resume offset {offset} exceeds .part file size {st.st_size}"
+            )
+        os.ftruncate(fd, offset)
+        os.lseek(fd, offset, os.SEEK_SET)
+        return os.fdopen(fd, mode)
+    except Exception:
+        os.close(fd)
+        raise

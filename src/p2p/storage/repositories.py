@@ -528,9 +528,83 @@ class DownloadRepository:
         try:
             with self._db.connection() as conn:
                 rows = conn.execute(
-                    "SELECT * FROM downloads ORDER BY updated_at DESC, started_at DESC LIMIT ?",
+                    "SELECT * FROM downloads "
+                    "ORDER BY updated_at DESC, started_at DESC, rowid DESC LIMIT ?",
                     (limit,),
                 ).fetchall()
             return [_row_to_download(r) for r in rows]
         except sqlite3.Error as exc:
             raise StorageError(f"Failed to list downloads: {exc}") from exc
+
+    def list_checkpoints(self) -> dict[str, TransferCheckpoint]:
+        """Return all active resume checkpoints keyed by transfer_id."""
+        try:
+            with self._db.connection() as conn:
+                rows = conn.execute(
+                    "SELECT * FROM transfer_checkpoints ORDER BY updated_at DESC"
+                ).fetchall()
+            return {
+                str(row["transfer_id"]): TransferCheckpoint(
+                    transfer_id=str(row["transfer_id"]),
+                    resume_offset=int(row["resume_offset"]),
+                    expected_sha256=str(row["expected_sha256"]),
+                    expected_size=int(row["expected_size"]),
+                    part_path=str(row["part_path"]),
+                    updated_at=str(row["updated_at"]),
+                )
+                for row in rows
+            }
+        except sqlite3.Error as exc:
+            raise StorageError(f"Failed to list transfer checkpoints: {exc}") from exc
+
+    def find_resumable(self, identifier: str) -> tuple[DownloadRecord, TransferCheckpoint] | None:
+        """Look up a resumable (DownloadRecord, TransferCheckpoint) by transfer_id or file_id."""
+        try:
+            with self._db.connection() as conn:
+                row = conn.execute(
+                    """
+                    SELECT d.*,
+                           c.resume_offset AS cp_resume_offset,
+                           c.expected_sha256 AS cp_expected_sha256,
+                           c.expected_size AS cp_expected_size,
+                           c.part_path AS cp_part_path,
+                           c.updated_at AS cp_updated_at
+                    FROM downloads d
+                    JOIN transfer_checkpoints c ON d.transfer_id = c.transfer_id
+                    WHERE d.transfer_id = ?
+                    """,
+                    (identifier,),
+                ).fetchone()
+                if row is None:
+                    row = conn.execute(
+                        """
+                        SELECT d.*,
+                               c.resume_offset AS cp_resume_offset,
+                               c.expected_sha256 AS cp_expected_sha256,
+                               c.expected_size AS cp_expected_size,
+                               c.part_path AS cp_part_path,
+                               c.updated_at AS cp_updated_at
+                        FROM downloads d
+                        JOIN transfer_checkpoints c ON d.transfer_id = c.transfer_id
+                        WHERE d.file_id = ?
+                        ORDER BY c.updated_at DESC, d.started_at DESC, c.rowid DESC
+                        LIMIT 1
+                        """,
+                        (identifier,),
+                    ).fetchone()
+            if row is None:
+                return None
+            record = _row_to_download(row)
+            checkpoint = TransferCheckpoint(
+                transfer_id=record.transfer_id,
+                resume_offset=int(row["cp_resume_offset"]),
+                expected_sha256=str(row["cp_expected_sha256"]),
+                expected_size=int(row["cp_expected_size"]),
+                part_path=str(row["cp_part_path"]),
+                updated_at=str(row["cp_updated_at"]),
+            )
+            return record, checkpoint
+        except sqlite3.Error as exc:
+            raise StorageError(
+                f"Failed to query resumable download for {identifier}: {exc}"
+            ) from exc
