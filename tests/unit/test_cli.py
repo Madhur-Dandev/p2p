@@ -143,10 +143,6 @@ def test_cli_config_share_and_logs_end_to_end(
         ["stop"],
         ["status"],
         ["peers"],
-        ["index", "rebuild"],
-        ["search", "notes"],
-        ["download", "file-123"],
-        ["downloads"],
     ],
 )
 def test_planned_commands_fail_honestly_until_implemented(
@@ -154,7 +150,6 @@ def test_planned_commands_fail_honestly_until_implemented(
 ) -> None:
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.delenv("P2P_CONFIG", raising=False)
-    # Use default environment cleanly
     assert os.environ.get("HOME") == str(tmp_path)
 
     out, err = io.StringIO(), io.StringIO()
@@ -164,9 +159,58 @@ def test_planned_commands_fail_honestly_until_implemented(
 
 
 @pytest.mark.unit
+def test_cli_index_search_and_downloads_empty_flow(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    with tempfile.TemporaryDirectory(prefix="p2phome-") as short_home:
+        monkeypatch.setenv("HOME", short_home)
+        cfg_path = tmp_path / "peer.toml"
+        share_dir = tmp_path / "shared"
+        share_dir.mkdir()
+        (share_dir / "networking notes.txt").write_text("tcp udp", encoding="utf-8")
+
+        out, err = io.StringIO(), io.StringIO()
+        assert run_cli(["--config", str(cfg_path), "config", "init"], stdout=out, stderr=err) == 0
+        assert (
+            run_cli(
+                ["--config", str(cfg_path), "share", "add", str(share_dir)],
+                stdout=out,
+                stderr=err,
+            )
+            == 0
+        )
+
+        # index rebuild
+        out, err = io.StringIO(), io.StringIO()
+        assert run_cli(["--config", str(cfg_path), "index", "rebuild"], stdout=out, stderr=err) == 0
+        assert "added=1" in out.getvalue()
+
+        # search local index
+        out, err = io.StringIO(), io.StringIO()
+        assert (
+            run_cli(["--config", str(cfg_path), "search", "networking"], stdout=out, stderr=err)
+            == 0
+        )
+        assert "networking notes.txt" in out.getvalue()
+
+        # download without --peer reports actionable milestone requirement
+        out, err = io.StringIO(), io.StringIO()
+        assert (
+            run_cli(["--config", str(cfg_path), "download", "abc123"], stdout=out, stderr=err) == 2
+        )
+        assert "--peer HOST:PORT is required" in err.getvalue()
+
+        # downloads history empty check
+        out, err = io.StringIO(), io.StringIO()
+        assert run_cli(["--config", str(cfg_path), "downloads"], stdout=out, stderr=err) == 0
+        assert "No download history recorded" in out.getvalue()
+
+
+@pytest.mark.unit
 def test_dev_subcommand_help_prints_usage() -> None:
     out, err = io.StringIO(), io.StringIO()
     code = run_cli(["dev"], stdout=out, stderr=err)
     assert code == 2
     assert "tcp-server" in out.getvalue()
     assert "tcp-ping" in out.getvalue()
+    assert "peer-node" in out.getvalue()

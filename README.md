@@ -2,7 +2,7 @@
 
 A modular, decentralized peer-to-peer (P2P) file discovery and transfer application built incrementally in Python 3.12+ using `asyncio`, `sqlite3`, `hashlib`, `tomllib`, and `argparse`.
 
-> **Current Stage:** **Milestone 4 — Unified Binary Protocol Framing & Request Correlation** (builds on Milestones 1–3 with a unified 26-byte binary header codec, typed payload validation for all 11 protocol messages, `RequestCorrelator`, and protocol-upgraded TCP/UDP transport). SQLite indexing, search, file transfer, and daemon IPC arrive in Milestones 5–12.
+> **Current Stage:** **Milestones 1–6 & 8 — SQLite Indexing, Local Search, & Direct TCP File Transfer** (builds on Milestones 1–4 with symlink-safe path validation, SQLite schema/migrations and repositories, recursive SHA-256 shared-directory indexing, local SQLite file search, direct TCP streaming transfers over `.part` temporary files with SHA-256 verification, and download history tracking). Distributed multi-peer search (Milestone 7), offset-based resume (Milestone 9), daemon IPC (Milestone 11), and benchmarking (Milestone 12) remain ahead.
 
 ## Project Overview
 
@@ -18,8 +18,8 @@ See [docs/architecture.md](docs/architecture.md) and [docs/protocol.md](docs/pro
 
 - **Language:** Python 3.12+ (pure standard library runtime core)
 - **Networking:** `asyncio` (`start_server`, `open_connection`, `create_datagram_endpoint`), `socket`, `struct`, `ipaddress`
-- **Database:** `sqlite3` (planned in Milestone 5)
-- **Integrity:** `hashlib` SHA-256 streaming (planned in Milestone 5 & 8)
+- **Database:** `sqlite3` (WAL mode, explicit schema migrations, parameterized repositories)
+- **Integrity:** `hashlib` SHA-256 streaming (`64 KiB` chunks; verified before `.part` promotion)
 - **Configuration:** `tomllib` (standard library) + atomic TOML serialization
 - **CLI:** `argparse`
 - **Testing & Quality:** `pytest`, `pytest-asyncio`, `ruff`, `mypy`
@@ -47,7 +47,7 @@ python -m p2p config init
 
 Or copy and customize [config.example.toml](config.example.toml), then point to it with `--config /path/to/config.toml` or `P2P_CONFIG=/path/to/config.toml`.
 
-## Usage (Milestones 1–4)
+## Usage (Milestones 1–6 & 8)
 
 ```bash
 # Show CLI help and available / planned commands
@@ -66,13 +66,19 @@ python -m p2p --config ./local-peer.toml share remove ~/Documents/shared
 # View recent rotating log entries
 python -m p2p --config ./local-peer.toml logs --lines 20
 
-# Temporary dev mode: verify correlated 26-byte P2P v1 TCP PING/PONG & UDP discovery
+# Index local shared files into SQLite and search the local index
+python -m p2p --config ./peer1.toml index rebuild
+python -m p2p --config ./peer1.toml search "sample"
+
+# Run two local peers (Terminal 1 shares & indexes files; Terminal 2 downloads over TCP)
 # Terminal 1 (Node A):
 python -m p2p --config ./peer1.toml dev peer-node --host 127.0.0.1 --tcp-port 9001 --udp-port 9998 --no-broadcast --udp-target 127.0.0.1:9999
 # Terminal 2 (Node B):
 python -m p2p --config ./peer2.toml dev peer-node --host 127.0.0.1 --tcp-port 9002 --udp-port 9999 --no-broadcast --udp-target 127.0.0.1:9998
-# Terminal 3 (TCP PING check):
+# Terminal 3 (TCP PING, direct TCP download, and SQLite download history):
 python -m p2p --config ./peer2.toml dev tcp-ping 127.0.0.1 9001
+python -m p2p --config ./peer2.toml download <file_id> --peer 127.0.0.1:9001
+python -m p2p --config ./peer2.toml downloads
 ```
 
 ## Network & Security Scope
@@ -95,11 +101,11 @@ python -m ruff check src tests
 2. **Milestone 2 (Complete):** Asynchronous TCP server/client communication and framing tests.
 3. **Milestone 3 (Complete):** UDP LAN discovery, heartbeats, static fallback, and peer registry.
 4. **Milestone 4 (Complete):** Binary frame codec, payload validation, and request correlation.
-5. **Milestone 5:** SQLite storage migrations and secure shared-directory SHA-256 indexing.
-6. **Milestone 6:** Local file search.
+5. **Milestone 5 (Complete):** SQLite storage migrations and secure shared-directory SHA-256 indexing.
+6. **Milestone 6 (Complete):** Local file search and `SEARCH_REQUEST` / `SEARCH_RESPONSE` handler.
 7. **Milestone 7:** Distributed search across peers with bounded timeouts and result merging.
-8. **Milestone 8:** Direct TCP streaming file transfer and SHA-256 verification.
-9. **Milestone 9:** Resumable downloads (`.part` state) and concurrent transfer management.
+8. **Milestone 8 (Complete):** Direct TCP streaming file transfer, `.part` verification, and SQLite download history.
+9. **Milestone 9:** Resumable downloads (`.part` offset resume) and enhanced transfer recovery.
 10. **Milestone 10:** Security hardening and graceful shutdown audit.
 11. **Milestone 11:** Background daemon and Unix domain socket IPC integration.
 12. **Milestone 12:** End-to-end validation, benchmarks, graphs, and final documentation.

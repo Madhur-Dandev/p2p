@@ -22,8 +22,9 @@ from p2p.config import (
     resolve_config_path,
     save_config,
 )
-from p2p.constants import APP_VERSION, VALID_LOG_LEVELS
+from p2p.constants import APP_VERSION, MAX_SEARCH_RESULTS_PER_PEER, VALID_LOG_LEVELS
 from p2p.exceptions import P2PError
+from p2p.indexing.file_index import FileIndexer
 from p2p.logging_config import (
     configure_logging,
     get_context_logger,
@@ -31,9 +32,14 @@ from p2p.logging_config import (
     shutdown_logging,
 )
 from p2p.network.discovery import DiscoveryService, parse_host_port
-from p2p.network.peer_registry import PeerInfo, PeerRegistry
+from p2p.network.peer_registry import PeerInfo, PeerRegistry, PeerStatus
 from p2p.network.tcp_client import TcpClient
 from p2p.network.tcp_server import TcpServer
+from p2p.search.local_search import LocalSearchService
+from p2p.storage.database import Database
+from p2p.storage.repositories import DownloadRepository, PeerRepository
+from p2p.transfer.progress import TransferProgress
+from p2p.transfer.transfer_manager import TransferManager
 from p2p.utils.time_utils import monotonic_now
 
 _PLANNED_COMMANDS: dict[str, tuple[str, str]] = {
@@ -41,10 +47,6 @@ _PLANNED_COMMANDS: dict[str, tuple[str, str]] = {
     "stop": ("Milestone 11", "Daemon IPC shutdown control"),
     "status": ("Milestone 11", "Daemon IPC status reporting"),
     "peers": ("Milestone 11", "Query daemon peer registry over IPC (use 'dev peer-node' now)"),
-    "index": ("Milestone 5", "SQLite storage and shared-directory indexing"),
-    "search": ("Milestone 6 & 7", "Local SQLite search and distributed peer queries"),
-    "download": ("Milestone 8 & 9", "Direct TCP file transfer, SHA-256 verification, and resume"),
-    "downloads": ("Milestone 8 & 9", "SQLite download history and transfer state tracking"),
 }
 
 
@@ -64,7 +66,7 @@ def _build_parser_and_subparsers() -> tuple[
         prog="p2p",
         description=(
             "Decentralized Peer-to-Peer File Discovery and Transfer System "
-            "(Milestone 4: foundation, async TCP, UDP discovery, and binary protocol)."
+            "(Milestones 1–6 & 8: config, TCP/UDP, SQLite indexing, local search, direct transfer)."
         ),
     )
     parser.add_argument(
@@ -264,29 +266,68 @@ def _build_parser_and_subparsers() -> tuple[
 
     index_parser = subparsers.add_parser(
         "index",
-        help="Manage the local shared-file index [planned: Milestone 5].",
+        help="Manage the local shared-file index.",
     )
     index_sub = index_parser.add_subparsers(dest="index_action", metavar="ACTION")
-    index_sub.add_parser("rebuild", help="Rebuild the local file index.")
+    index_rebuild = index_sub.add_parser("rebuild", help="Rebuild the local file index.")
+    index_rebuild.add_argument(
+        "--force-rehash",
+        action="store_true",
+        help="Recompute SHA-256 hashes for all files regardless of cached size/mtime.",
+    )
 
     search_parser = subparsers.add_parser(
         "search",
-        help="Search for files across local and remote peers [planned: Milestone 6 & 7].",
+        help="Search for files (local SQLite index now; remote peer search in Milestone 7).",
     )
     search_parser.add_argument("query", help="Filename or substring to search for.")
+    search_parser.add_argument(
+        "--exact",
+        action="store_true",
+        help="Match exact filename (case-insensitive) instead of substring.",
+    )
+    search_parser.add_argument(
+        "--limit",
+        type=int,
+        default=MAX_SEARCH_RESULTS_PER_PEER,
+        help=f"Maximum results to return (default: {MAX_SEARCH_RESULTS_PER_PEER}).",
+    )
 
     download_parser = subparsers.add_parser(
         "download",
-        help="Download a file by file ID from a peer [planned: Milestone 8 & 9].",
+        help="Download a file by file ID directly over TCP from a peer.",
     )
-    download_parser.add_argument("file_id", help="Target file identifier from search results.")
+    download_parser.add_argument("file_id", help="Target file identifier.")
+    download_parser.add_argument(
+        "--peer",
+        default=None,
+        metavar="HOST:PORT",
+        help="Source peer TCP endpoint (required until Milestone 7 & 11 daemon lookup).",
+    )
+    download_parser.add_argument(
+        "--output-dir",
+        type=Path,
+        default=None,
+        help="Override configured storage.download_dir destination.",
+    )
 
-    subparsers.add_parser(
+    downloads_parser = subparsers.add_parser(
         "downloads",
-        help="List download history and active/partial transfers [planned: Milestone 8 & 9].",
+        help="List download history and transfer states stored in SQLite.",
+    )
+    downloads_parser.add_argument(
+        "--limit",
+        type=int,
+        default=50,
+        help="Maximum history rows to display (default: 50).",
     )
 
-    return parser, {"config": config_parser, "share": share_parser, "dev": dev_parser}
+    return parser, {
+        "config": config_parser,
+        "share": share_parser,
+        "dev": dev_parser,
+        "index": index_parser,
+    }
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -466,6 +507,154 @@ async def _run_dev_tcp_ping(
     return 0
 
 
+def _handle_index(
+    args: argparse.Namespace,
+    index_parser: argparse.ArgumentParser,
+    out: TextIO,
+    err: TextIO,
+) -> int:
+    action = args.index_action
+    if action is None:
+        index_parser.print_help(file=out)
+        return 2
+
+    cfg = load_config(args.config)
+    configure_logging(cfg.logging, node_peer_id=cfg.node.peer_id, level_override=args.log_level)
+
+    if action == "rebuild":
+        with Database(cfg.storage.database_path) as db:
+            indexer = FileIndexer(
+                db,
+                shared_directories=cfg.sharing.directories,
+                excluded_dirs=cfg.sharing.excluded_dirs,
+                follow_symlinks=cfg.sharing.follow_symlinks,
+                hash_chunk_size=cfg.transfer.chunk_size_bytes,
+                max_filename_length=cfg.limits.max_filename_length,
+            )
+            summary = indexer.rebuild(force_rehash=args.force_rehash)
+        print(
+            f"Index rebuilt: scanned={summary.scanned} added={summary.added} "
+            f"updated={summary.updated} cached={summary.unchanged_cached} "
+            f"removed={summary.removed} symlinks_skipped={summary.skipped_symlinks} "
+            f"errors={summary.skipped_errors} duration={summary.duration_sec:.3f}s",
+            file=out,
+        )
+        return 0
+
+    print(f"Unsupported index action: {action}", file=err)
+    return 2
+
+
+def _handle_search(args: argparse.Namespace, out: TextIO) -> int:
+    cfg = load_config(args.config)
+    configure_logging(cfg.logging, node_peer_id=cfg.node.peer_id, level_override=args.log_level)
+
+    with Database(cfg.storage.database_path) as db:
+        service = LocalSearchService(
+            db,
+            peer_id=cfg.node.peer_id,
+            max_query_length=cfg.limits.max_query_length,
+        )
+        matches, truncated = service.search(
+            args.query,
+            exact=args.exact,
+            max_results=args.limit,
+        )
+
+    if not matches:
+        print(
+            f"No local files matched {args.query!r} (remote peer search arrives in Milestone 7).",
+            file=out,
+        )
+        return 0
+
+    print(
+        f"Local search matches for {args.query!r} ({len(matches)} shown"
+        f"{', truncated' if truncated else ''}):",
+        file=out,
+    )
+    for item in matches:
+        print(
+            f"  file_id={item.file_id} | name={item.file_name} | "
+            f"size={item.file_size} B | sha256={item.sha256[:12]}... | path={item.relative_path}",
+            file=out,
+        )
+    return 0
+
+
+async def _run_download(cfg: AppConfig, args: argparse.Namespace, out: TextIO) -> int:
+    host, port = parse_host_port(args.peer)
+
+    last_percent = -10.0
+
+    def _on_progress(progress: TransferProgress) -> None:
+        nonlocal last_percent
+        if progress.percent >= last_percent + 20.0 or progress.percent >= 100.0:
+            last_percent = progress.percent
+            print(
+                f"  [{progress.state.value}] {progress.file_name}: "
+                f"{progress.bytes_transferred}/{progress.total_bytes} B "
+                f"({progress.percent:.1f}%, {progress.throughput_mbps:.2f} Mbps)",
+                file=out,
+                flush=True,
+            )
+
+    with Database(cfg.storage.database_path) as db:
+        manager = TransferManager(cfg, db)
+        result = await manager.download_file(
+            host=host,
+            port=port,
+            file_id=args.file_id,
+            on_progress=_on_progress,
+        )
+
+    print(
+        f"Download completed: {result.destination_path} "
+        f"({result.bytes_downloaded} B, {result.throughput_mbps:.2f} Mbps, "
+        f"sha256={result.actual_sha256})",
+        file=out,
+    )
+    return 0
+
+
+def _handle_download(args: argparse.Namespace, out: TextIO, err: TextIO) -> int:
+    if args.peer is None:
+        print(
+            "Option --peer HOST:PORT is required until Milestone 7 (distributed search) "
+            "and Milestone 11 (daemon IPC) are implemented.",
+            file=err,
+        )
+        return 2
+
+    cfg = load_config(args.config)
+    if args.output_dir is not None:
+        cfg.storage.download_dir = Path(args.output_dir).expanduser().resolve(strict=False)
+    configure_logging(cfg.logging, node_peer_id=cfg.node.peer_id, level_override=args.log_level)
+    return asyncio.run(_run_download(cfg, args, out))
+
+
+def _handle_downloads(args: argparse.Namespace, out: TextIO) -> int:
+    cfg = load_config(args.config)
+    configure_logging(cfg.logging, node_peer_id=cfg.node.peer_id, level_override=args.log_level)
+
+    with Database(cfg.storage.database_path) as db:
+        records = DownloadRepository(db).list_downloads(limit=args.limit)
+
+    if not records:
+        print("No download history recorded.", file=out)
+        return 0
+
+    for rec in records:
+        err_suffix = f" error={rec.error_message!r}" if rec.error_message else ""
+        print(
+            f"transfer_id={rec.transfer_id} | file={rec.file_name} ({rec.file_id}) | "
+            f"status={rec.status} | bytes={rec.bytes_downloaded}/{rec.expected_size} | "
+            f"dest={rec.destination_path or '-'} | updated={rec.updated_at}{err_suffix}",
+            file=out,
+        )
+    return 0
+
+
 async def _run_dev_peer_node(
     cfg: AppConfig,
     args: argparse.Namespace,
@@ -484,66 +673,92 @@ async def _run_dev_peer_node(
     udp_targets = [parse_host_port(item) for item in args.udp_target]
     static_peers = list(cfg.discovery.static_peers) + list(args.static_peer)
 
-    server = TcpServer(
-        host=bind_host,
-        port=tcp_port,
-        max_connections=cfg.limits.max_simultaneous_connections,
-        shutdown_timeout_sec=cfg.daemon.shutdown_timeout_sec,
-        control_timeout_sec=cfg.network.control_timeout_sec,
-        max_payload_bytes=cfg.limits.max_control_payload_bytes,
-        peer_id=cfg.node.peer_id,
-        display_name=cfg.node.display_name,
-    )
-    registry = PeerRegistry(
-        local_peer_id=cfg.node.peer_id,
-        stale_timeout_sec=stale_timeout,
-        remove_timeout_sec=remove_timeout,
-    )
-
-    def _on_peer_event(event: str, peer: PeerInfo) -> None:
-        print(
-            f"[event:{event}] peer_id={peer.peer_id} name={peer.display_name} "
-            f"endpoint={peer.ip_address}:{peer.tcp_port} status={peer.status} source={peer.source}",
-            file=out,
-            flush=True,
+    with Database(cfg.storage.database_path) as db:
+        indexer = FileIndexer(
+            db,
+            shared_directories=cfg.sharing.directories,
+            excluded_dirs=cfg.sharing.excluded_dirs,
+            follow_symlinks=cfg.sharing.follow_symlinks,
+            hash_chunk_size=cfg.transfer.chunk_size_bytes,
+            max_filename_length=cfg.limits.max_filename_length,
         )
+        if cfg.sharing.directories:
+            await indexer.rebuild_async()
 
-    stop_event = asyncio.Event()
-    loop = asyncio.get_running_loop()
-    for sig in (signal.SIGINT, signal.SIGTERM):
-        with contextlib.suppress(NotImplementedError):
-            loop.add_signal_handler(sig, stop_event.set)
+        search_service = LocalSearchService(
+            db,
+            peer_id=cfg.node.peer_id,
+            max_query_length=cfg.limits.max_query_length,
+        )
+        transfer_manager = TransferManager(cfg, db, search_service=search_service)
+        peer_repo = PeerRepository(db)
 
-    async with server:
-        discovery = DiscoveryService(
-            local_peer_id=cfg.node.peer_id,
+        server = TcpServer(
+            host=bind_host,
+            port=tcp_port,
+            max_connections=cfg.limits.max_simultaneous_connections,
+            shutdown_timeout_sec=cfg.daemon.shutdown_timeout_sec,
+            control_timeout_sec=cfg.network.control_timeout_sec,
+            max_payload_bytes=cfg.limits.max_control_payload_bytes,
+            max_data_chunk_bytes=cfg.limits.max_data_chunk_bytes,
+            peer_id=cfg.node.peer_id,
             display_name=cfg.node.display_name,
-            tcp_port=server.bound_port,
-            registry=registry,
-            bind_host=bind_host,
-            udp_port=udp_port,
-            broadcast_address=cfg.discovery.broadcast_address,
-            broadcast_enabled=cfg.discovery.enabled and not args.no_broadcast,
-            heartbeat_interval_sec=heartbeat,
-            static_peers=static_peers,
-            discovery_targets=udp_targets,
-            tcp_client=TcpClient(
-                peer_id=cfg.node.peer_id,
-                connect_timeout_sec=cfg.network.connect_timeout_sec,
-                control_timeout_sec=cfg.network.control_timeout_sec,
-                max_payload_bytes=cfg.limits.max_control_payload_bytes,
-            ),
-            on_event=_on_peer_event,
+            handler=transfer_manager.serve_connection,
         )
-        async with discovery:
+        registry = PeerRegistry(
+            local_peer_id=cfg.node.peer_id,
+            stale_timeout_sec=stale_timeout,
+            remove_timeout_sec=remove_timeout,
+        )
+
+        def _on_peer_event(event: str, peer: PeerInfo) -> None:
+            if peer.status == PeerStatus.REMOVED:
+                peer_repo.update_status(peer.peer_id, PeerStatus.REMOVED)
+            else:
+                peer_repo.upsert_peer(peer)
             print(
-                f"[dev mode] Peer node running: peer_id={cfg.node.peer_id} "
-                f"name={cfg.node.display_name} tcp={bind_host}:{server.bound_port} "
-                f"udp={bind_host}:{discovery.bound_port}. Press Ctrl+C to stop.",
+                f"[event:{event}] peer_id={peer.peer_id} name={peer.display_name} "
+                f"endpoint={peer.ip_address}:{peer.tcp_port} status={peer.status} "
+                f"source={peer.source}",
                 file=out,
                 flush=True,
             )
-            await stop_event.wait()
+
+        stop_event = asyncio.Event()
+        loop = asyncio.get_running_loop()
+        for sig in (signal.SIGINT, signal.SIGTERM):
+            with contextlib.suppress(NotImplementedError):
+                loop.add_signal_handler(sig, stop_event.set)
+
+        try:
+            async with server:
+                transfer_manager.upload_service.set_tcp_port(server.bound_port)
+                discovery = DiscoveryService(
+                    local_peer_id=cfg.node.peer_id,
+                    display_name=cfg.node.display_name,
+                    tcp_port=server.bound_port,
+                    registry=registry,
+                    bind_host=bind_host,
+                    udp_port=udp_port,
+                    broadcast_address=cfg.discovery.broadcast_address,
+                    broadcast_enabled=cfg.discovery.enabled and not args.no_broadcast,
+                    heartbeat_interval_sec=heartbeat,
+                    static_peers=static_peers,
+                    discovery_targets=udp_targets,
+                    tcp_client=transfer_manager.tcp_client,
+                    on_event=_on_peer_event,
+                )
+                async with discovery:
+                    print(
+                        f"[dev mode] Peer node running: peer_id={cfg.node.peer_id} "
+                        f"name={cfg.node.display_name} tcp={bind_host}:{server.bound_port} "
+                        f"udp={bind_host}:{discovery.bound_port}. Press Ctrl+C to stop.",
+                        file=out,
+                        flush=True,
+                    )
+                    await stop_event.wait()
+        finally:
+            transfer_manager.cancel_all()
     print("[dev mode] Peer node stopped.", file=out, flush=True)
     return 0
 
@@ -614,6 +829,14 @@ def run_cli(
             return _handle_config(args, subparsers["config"], out, err)
         if args.command == "share":
             return _handle_share(args, subparsers["share"], out, err)
+        if args.command == "index":
+            return _handle_index(args, subparsers["index"], out, err)
+        if args.command == "search":
+            return _handle_search(args, out)
+        if args.command == "download":
+            return _handle_download(args, out, err)
+        if args.command == "downloads":
+            return _handle_downloads(args, out)
         if args.command == "logs":
             return _handle_logs(args, out, err)
         if args.command == "dev":

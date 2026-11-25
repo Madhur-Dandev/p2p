@@ -51,18 +51,19 @@ flowchart TD
 | `p2p.utils` | Milestone 1 (Implemented) | UUIDv4 peer/request/transfer ID generation and validation; UTC and monotonic clocks. |
 | `p2p.config` | Milestone 1 (Implemented) | Typed configuration dataclasses, `tomllib` parsing, validation, atomic TOML writes, shared-directory config management. |
 | `p2p.logging_config` | Milestone 1 (Implemented) | UTC rotating file + stderr logging with `peer_id`, `request_id`, and `transfer_id` correlation fields. |
-| `p2p.cli`, `p2p.main` | Milestone 1–4 (Implemented) | `argparse` CLI entry point (`python -m p2p`) supporting config, share, logs, temporary `dev` foreground commands (`tcp-server`, `tcp-ping`, `peer-node`), and honest milestone gating for later subsystems. |
+| `p2p.cli`, `p2p.main` | Milestone 1–6 & 8 (Implemented) | `argparse` CLI entry point (`python -m p2p`) supporting config, share, index rebuild, local search, direct download, downloads history, logs, and foreground `dev` peer node. |
 | `p2p.network.framing`, `p2p.network.protocol`, `p2p.network.serialization` | Milestone 4 (Implemented) | Authoritative 26-byte binary header codec, typed schema validation for all 11 messages, JSON/raw serialization, and `RequestCorrelator`. |
 | `p2p.network.tcp_server`, `p2p.network.tcp_client` | Milestone 2 & 4 (Implemented) | `asyncio.start_server` / `asyncio.open_connection` speaking 26-byte protocol frames with `request_id` correlation, bounded connections, and graceful shutdown. |
 | `p2p.network.discovery`, `p2p.network.peer_registry` | Milestone 3 & 4 (Implemented) | UDP discovery (`DISCOVER`/`ANNOUNCE`/`HEARTBEAT`), static-peer TCP fallback, and `ACTIVE`/`STALE`/`REMOVED` peer registry using unified framing. |
-| `p2p.storage` | Milestone 5 (Planned) | SQLite schema migrations, parameterized repositories for peers, shared files, downloads, and resume checkpoints. |
-| `p2p.indexing` | Milestone 5 (Planned) | Recursive non-symlink directory scanning, metadata caching `(size, mtime_ns)`, streaming SHA-256 hashing. |
-| `p2p.search` | Milestone 6 & 7 (Planned) | Local SQLite matching plus bounded-timeout concurrent queries across active peers and result deduplication. |
-| `p2p.transfer` | Milestone 8 & 9 (Planned) | Explicit transfer state machine, bounded-chunk TCP streaming, `.part` temporary files, SHA-256 verification, offset-validated resume. |
-| `p2p.security` | Milestone 10 (Planned) | Canonical symlink-safe path containment, strict payload/field validation, and connection/transfer semaphores. |
+| `p2p.storage` | Milestone 5 (Implemented) | SQLite schema migrations, serialized connection locking, and parameterized repositories (`peers`, `shared_files`, `downloads`, `transfer_checkpoints`). |
+| `p2p.indexing` | Milestone 5 (Implemented) | Recursive non-symlink directory scanning, metadata caching `(size, mtime_ns)`, streaming SHA-256 hashing, and transfer-time revalidation. |
+| `p2p.search.local_search` | Milestone 6 (Implemented) | Case-insensitive exact/partial SQLite search with escaped LIKE wildcards and `SEARCH_REQUEST` handler. |
+| `p2p.search.distributed_search`, `p2p.search.result_merger` | Milestone 7 (Planned) | Bounded-timeout concurrent queries across active peers and cross-peer result deduplication. |
+| `p2p.transfer` | Milestone 8 (Implemented; Resume in M9) | Explicit transfer state machine, bounded-chunk TCP upload/download streaming, `.part` temporary files, SHA-256 verification, and concurrent `TransferManager`. |
+| `p2p.security.path_validation` | Milestone 5, 8 & 10 (Implemented; full hardening in M10) | Canonical symlink-safe path containment, `O_NOFOLLOW` descriptor checks, and download destination validation. |
 | `p2p.daemon` | Milestone 11 (Planned) | Long-running service orchestrator, PID/lock management, Unix domain socket IPC server/client, graceful shutdown. |
 
 ## 4. Implementation Status
 
-- **Completed:** Milestones 1–4 (foundation/CLI/config/logging, async TCP server/client, UDP discovery + peer registry, unified 26-byte binary framing, typed validation for all 11 messages, and `request_id` correlation).
-- **Next:** Milestone 5 (SQLite persistence and secure shared-directory SHA-256 indexing).
+- **Completed:** Milestones 1–6 and Milestone 8 (foundation/CLI/config/logging, async TCP server/client, UDP discovery + peer registry, unified 26-byte binary framing, SQLite persistence, secure shared-directory SHA-256 indexing, local file search, direct TCP streaming upload/download, SHA-256 integrity verification, and download history).
+- **Next:** Milestone 7 (distributed search across peers & result merging), Milestone 9 (resumable `.part` downloads), Milestone 10 (full security hardening), Milestone 11 (daemon & Unix socket IPC), Milestone 12 (benchmarks & final evaluation).
